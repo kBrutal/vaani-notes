@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Vaani Notes</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="top">
+    <span class="logo" aria-hidden="true">व</span>
+    <b>Vaani</b>
+    <span id="conn" class="conn" title="Checking server…"></span>
+    <span class="grow"></span>
+    <a id="open-dash" class="icon-btn" title="Open dashboard" target="_blank" data-ic="external"></a>
+    <button id="settings-btn" class="icon-btn" title="Settings" data-ic="gear"></button>
+  </header>
+
+  <div id="notice" class="notice" hidden role="alert"></div>
+
+  <section id="settings" class="settings" hidden>
+    <label>Server<input id="api" placeholder="http://localhost:8000" spellcheck="false"></label>
+    <label>I speak
+      <select id="speak">
+        <option value="">Auto-detect</option>
+        <option value="hi">Hindi + English</option><option value="bn">Bengali + English</option>
+        <option value="ta">Tamil + English</option><option value="te">Telugu + English</option>
+        <option value="mr">Marathi + English</option><option value="kn">Kannada + English</option>
+        <option value="ml">Malayalam + English</option><option value="gu">Gujarati + English</option>
+        <option value="pa">Punjabi + English</option><option value="or">Odia + English</option>
+        <option value="as">Assamese + English</option><option value="ur">Urdu + English</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+    <label>Reply in
+      <select id="lang">
+        <option value="">My language</option>
+        <option>English</option><option>Hindi</option>
+        <option value="Hinglish (Hindi in Latin script mixed with English)">Hinglish</option>
+        <option>Bengali</option><option>Tamil</option><option>Telugu</option><option>Marathi</option>
+        <option>Kannada</option><option>Malayalam</option><option>Gujarati</option><option>Punjabi</option>
+        <option>Odia</option><option>Assamese</option><option>Urdu</option>
+      </select>
+    </label>
+    <p class="hint">Shortcuts: <kbd>Alt+Shift+N</kbd> open · <kbd>Alt+Shift+R</kbd> voice note. Change them at chrome://extensions/shortcuts</p>
+  </section>
+
+  <div class="chapter-row">
+    <select id="chapter" aria-label="Chapter"></select>
+    <button id="new-chapter-btn" class="icon-btn" title="New chapter" data-ic="plus"></button>
+  </div>
+  <form id="new-chapter" class="new-chapter" hidden>
+    <select id="nc-subject" aria-label="Subject"></select>
+    <input id="nc-subject-name" placeholder="New subject, e.g. Polity" hidden>
+    <input id="nc-name" placeholder="Chapter name, e.g. Fundamental Rights" required>
+    <div class="row"><button type="button" class="btn ghost" id="nc-cancel">Cancel</button><button class="btn primary">Create chapter</button></div>
+  </form>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="note" role="tab">Note</button>
+    <button data-tab="ask" role="tab">Ask</button>
+  </nav>
+
+  <main id="tab-note" class="pane">
+    <div id="context" class="context"></div>
+    <div class="recorder">
+      <button id="mic" class="mic-big" title="Speak a note (Alt+Shift+R)" data-ic="mic"></button>
+      <div id="rec-status" class="rec-status">Tap and explain what you understood</div>
+      <button id="cancel-rec" class="btn ghost sm" hidden>Cancel</button>
+    </div>
+    <details class="type-note">
+      <summary>Type instead</summary>
+      <form id="type-form"><textarea name="text" rows="3" placeholder="Any language, mix English freely…" required></textarea>
+        <button class="btn primary sm">Save note</button></form>
+    </details>
+    <h3 class="sec">Recent in this chapter</h3>
+    <div id="recent" class="recent"></div>
+  </main>
+
+  <main id="tab-ask" class="pane" hidden>
+    <div class="ask-top">
+      <div class="seg" role="radiogroup" aria-label="Scope">
+        <button data-scope="chapter">Chapter</button><button data-scope="subject">Subject</button><button data-scope="all">All</button>
+      </div>
+      <div class="quick">
+        <button class="btn sm" data-intent="summary">Summary</button>
+        <button class="btn sm" data-intent="flashcards">Flashcards</button>
+        <button class="btn sm" data-intent="quiz">Quiz</button>
+      </div>
+    </div>
+    <div id="thread" class="thread" aria-live="polite">
+      <p class="muted hint-ask">Ask in any language. Answers come from your own notes.</p>
+    </div>
+    <form id="ask-form" class="composer">
+      <textarea id="q" rows="1" placeholder="Ask your notes…" aria-label="Question"></textarea>
+      <button type="button" id="ask-mic" class="round" title="Ask by voice" data-ic="mic"></button>
+      <button class="round send" title="Send" data-ic="send"></button>
+    </form>
+  </main>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

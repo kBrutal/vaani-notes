@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vaani Notes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="side" aria-label="Library">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">व</span>
+        <div><b>Vaani Notes</b><small>speak · structure · revise</small></div>
+      </div>
+      <div class="side-label">Library</div>
+      <nav id="library" class="library"></nav>
+      <form id="add-subject" class="add-subject">
+        <input name="name" placeholder="New subject…" autocomplete="off" aria-label="New subject name" required>
+        <button class="icon-btn" title="Add subject" data-ic="plus"></button>
+      </form>
+      <label class="side-foot">
+        <span>I speak</span>
+        <select id="speak" aria-label="Language I speak">
+          <option value="">Auto-detect</option>
+          <option value="hi">Hindi + English</option>
+          <option value="bn">Bengali + English</option>
+          <option value="ta">Tamil + English</option>
+          <option value="te">Telugu + English</option>
+          <option value="mr">Marathi + English</option>
+          <option value="kn">Kannada + English</option>
+          <option value="ml">Malayalam + English</option>
+          <option value="gu">Gujarati + English</option>
+          <option value="pa">Punjabi + English</option>
+          <option value="or">Odia + English</option>
+          <option value="as">Assamese + English</option>
+          <option value="ur">Urdu + English</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+    </aside>
+
+    <main id="main" class="main"></main>
+
+    <section class="assist" aria-label="Ask your notes">
+      <header class="assist-head">
+        <div class="assist-title">
+          <h2>Ask your notes</h2>
+          <label class="reply-lang">
+            <span>Reply in</span>
+            <select id="lang" aria-label="Reply language">
+              <option value="">My language</option>
+              <option>English</option>
+              <option>Hindi</option>
+              <option value="Hinglish (Hindi in Latin script mixed with English)">Hinglish</option>
+              <option>Bengali</option><option>Tamil</option><option>Telugu</option><option>Marathi</option>
+              <option>Kannada</option><option>Malayalam</option><option>Gujarati</option><option>Punjabi</option>
+              <option>Odia</option><option>Assamese</option><option>Urdu</option>
+            </select>
+          </label>
+          <button class="icon-btn assist-close" data-act="toggle-assist" title="Close" data-ic="x"></button>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Search scope">
+          <button data-act="scope" data-scope="chapter" role="radio">This chapter</button>
+          <button data-act="scope" data-scope="subject" role="radio">Subject</button>
+          <button data-act="scope" data-scope="all" role="radio">All notes</button>
+        </div>
+      </header>
+      <div class="quick">
+        <button class="btn" data-act="quick" data-intent="summary"><span data-ic="list"></span>Summary</button>
+        <button class="btn" data-act="quick" data-intent="flashcards"><span data-ic="cards"></span>Flashcards</button>
+        <button class="btn" data-act="quick" data-intent="quiz"><span data-ic="quiz"></span>Quiz</button>
+      </div>
+      <div id="thread" class="thread" aria-live="polite">
+        <div class="thread-hint">
+          <p>Ask in any language. Answers come from <b>your own notes</b>.</p>
+          <button class="example" data-act="example" data-q="Article 21 mein kya kya aata hai?">“Article 21 mein kya kya aata hai?”</button>
+          <button class="example" data-act="example" data-q="What did I note about the Maneka Gandhi case?">“What did I note about the Maneka Gandhi case?”</button>
+          <button class="example" data-act="example" data-q="Is chapter ke 5 flashcards banao">“Is chapter ke 5 flashcards banao”</button>
+        </div>
+      </div>
+      <form id="ask" class="composer">
+        <textarea id="q" rows="1" placeholder="Ask, or press the mic…" aria-label="Question"></textarea>
+        <button type="button" class="round mic" data-act="rec-ask" title="Ask by voice (Alt A)" data-ic="mic"></button>
+        <button class="round send" title="Send" data-ic="send"></button>
+      </form>
+    </section>
+  </div>
+
+  <button class="fab" data-act="toggle-assist"><span data-ic="chat"></span>Ask</button>
+  <div class="backdrop" data-act="close-drawers"></div>
+  <div id="recpill" class="recpill" hidden role="status">
+    <span class="dot"></span><span id="rec-label"></span><span id="rec-time">0:00</span>
+    <button class="btn sm light" data-act="rec-stop" id="rec-stop">Stop</button>
+    <button class="btn sm ghost-light" data-act="rec-cancel">Cancel</button>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

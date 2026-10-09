@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+openai
+numpy
+pymongo
+# ASR: bodhan-ai/indic-transcribe-core (transformers path) + browser-audio decoding
+torch
+torchaudio
+transformers
+sentencepiece
+soundfile
+huggingface_hub
+av
