@@ -13,6 +13,13 @@ const store = {
   set: (k, v) => { try { localStorage.setItem('vaani.' + k, v); } catch {} },
 };
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+// One study session per tab: the agents keep its context (what was just noted, the conversation so far).
+const SID = (() => {
+  try {
+    if (!sessionStorage.getItem('vaani.sid')) sessionStorage.setItem('vaani.sid', crypto.randomUUID());
+    return sessionStorage.getItem('vaani.sid');
+  } catch { return crypto.randomUUID(); }
+})();
 
 const ICONS = {
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
@@ -60,7 +67,6 @@ const current = () => {
 const ctx = () => ({
   chapter_id: S.chapterId,
   scope: S.scope,
-  speak_lang: $('#speak').value || null,
   answer_lang: $('#lang').value || null,
   source: S.ref.trim() ? { type: 'book', ref: S.ref.trim() } : null,
 });
@@ -228,7 +234,7 @@ function renderMain() {
       <button class="icon-btn danger" data-act="del-chapter" title="Delete chapter">${ic('trash')}</button>
     </div>
     <div class="ch-actions">
-      <button class="btn primary lg" data-act="rec-note">${ic('mic')}<span class="rec-text">Add note by voice</span><kbd>Alt N</kbd></button>
+      <button class="btn primary lg" data-act="rec-note" title="The mic stays on: everything you explain is noted. To ask a doubt, start with “Question Vaani”">${ic('mic')}<span class="rec-text">${L.listener ? 'Stop listening' : 'Start listening'}</span><kbd>Alt N</kbd></button>
       <button class="btn lg" data-act="type-note">${ic('pen')} Type a note</button>
       <label class="src">${ic('book')}<input id="ref" placeholder="Source: book, page, lecture…" value="${esc(S.ref)}" aria-label="Source"></label>
     </div>
@@ -243,18 +249,21 @@ function renderMain() {
     ${names.map((t) => `<button class="chip ${S.topic === t ? 'active' : ''}" data-act="topic" data-topic="${esc(t)}">${esc(t)} <span class="count">${groups.get(t).length}</span></button>`).join('')}
   </nav>` : ''}
   <div class="notes-area">
-    ${busy.length ? `<section class="topic"><h2>Processing</h2><div class="masonry">${busy.map(pendingCard).join('')}</div></section>` : ''}
+    ${busy.length || S.draft ? `<section class="topic"><h2>Processing</h2><div class="masonry">${S.draft ? `<article class="note skeleton draft">
+        <span class="label">Drafting a note · saved when you pause for a while, ask a doubt, or stop</span>
+        <p class="tx-live" id="draft-text">${esc(S.draft)}</p></article>` : ''}${busy.map(pendingCard).join('')}</div></section>` : ''}
     ${ready.length
       ? shown.map((t) => `<section class="topic"><h2>${esc(t)} <span class="count">${groups.get(t).length}</span></h2>
           <div class="masonry">${groups.get(t).map(noteCard).join('')}</div></section>`).join('')
       : busy.length ? '' : `<div class="empty"><button class="empty-mic" data-act="rec-note" title="Add note by voice">${ic('mic')}</button>
           <h3>No notes in ${esc(c.name)} yet</h3>
-          <p>Press the mic (or <b>Alt N</b>) and explain a concept you just read or watched. Topics inside the chapter are created automatically.</p></div>`}
+          <p>Press the mic (or <b>Alt N</b>) and explain a concept you just read or watched. Topics inside the chapter are created automatically.
+            Stuck on something? Say <b>“Question Vaani”</b> and ask your doubt; Vaani answers in the chat and goes back to note-taking when you say “got it”.</p></div>`}
   </div>`;
 }
 
 async function openChapter(cid, focusNote) {
-  if (S.chapterId !== cid) S.topic = null;
+  if (S.chapterId !== cid) { S.topic = null; if (S.draft) flushDraft(); }
   S.chapterId = cid;
   store.set('chapter', cid);
   renderLib();
@@ -311,7 +320,15 @@ const quiz = (qs) => `<div class="quiz"><div class="score">${qs.length} question
     ${q.options.map((o, j) => `<button class="opt" data-act="opt" data-j="${j}">${'ABCD'[j]}. ${esc(o)}</button>`).join('')}
     <div class="explain" hidden>${esc(q.explain)}</div></div>`).join('')}</div>`;
 
+const sourceChips = (r) => `${r.steps?.length ? `<div class="steps-used">${r.steps.map((s) => `${s.tool === 'web_search' ? '🔎 Searched the web' : '📒 Searched your notes'}${s.query ? `: “${esc(s.query)}”` : ''}`).join('<br>')}</div>` : ''}
+  ${r.sources?.length ? `<div class="sources">${r.sources.map((s) => s.type === 'web'
+    ? `<a class="src-chip" href="${esc(safeUrl(s.url) || '#')}" target="_blank" rel="noopener">🌐 ${esc(s.title)}</a>`
+    : `<button class="src-chip" data-act="goto-note" data-cid="${esc(s.chapter_id || '')}" data-nid="${esc(s.id)}">📒 ${esc(s.title)}</button>`).join('')}</div>` : ''}`;
+
 function renderReply(r) {
+  if (r.kind === 'question') return `<div class="tutor-tag">Vaani</div>${answerHtml(r.reply)}${sourceChips(r)}`;
+  if (r.kind === 'end') return `<p class="muted">↩ ${esc(r.reply)}</p>`;
+  if (r.kind === 'empty' || r.kind === 'error') return `<p class="muted">${esc(r.reply)}</p>`;
   if (r.status === 'empty') return `<p class="muted">${esc(r.answer)}</p>`;
   const head = r.scope ? `<div class="scope-chip">${ic('book')} ${esc(r.scope)}${r.coverage ? ` · ${esc(r.coverage)}` : ''}</div>` : '';
   if (r.cards) return head + deck(r.cards);
@@ -338,7 +355,123 @@ async function askFlow(label, promise) {
   reply.classList.remove('pending');
   scroll();
 }
-const askText = (text, intent) => askFlow(text, api('/text', send('POST', { text, mode: 'ask', intent, ctx: ctx() })));
+// quick buttons go straight to the study tools; everything else is a turn in the study session
+const askText = (text, intent) => askFlow(text, intent
+  ? api('/text', send('POST', { text, mode: 'ask', intent, ctx: ctx() }))
+  : turn(api(`/session/${SID}/text`, send('POST', { text, expect: 'question', ctx: ctx() }))).then(resolveAnswer));
+
+// ---------- study session ----------
+function setMode(mode) { $('#convo').hidden = mode !== 'conversation'; }
+async function turn(promise) {  // tracks the conversation mode from any session reply
+  const r = await promise;
+  if (r.mode) setMode(r.mode);
+  return r;
+}
+async function resolveAnswer(r) {  // doubts are answered in the background; wait for this one
+  if (!r.answer_id) return r;
+  for (;;) {
+    const a = await api(`/session/${SID}/answers/${r.answer_id}`);
+    if (a.status !== 'pending') { if (a.mode) setMode(a.mode); return a; }
+    await sleep(600);
+  }
+}
+
+// ---------- continuous listening: one mic for notes and doubts ----------
+// The mic stays on; each stretch of speech goes to the study session, whose agents split it into note parts
+// (drafted into one note) and questions (answered in the chat). While Vaani answers, listening pauses.
+const clock = { ms: 0, since: null };  // listening time; stands still while paused for an answer
+const elapsed = () => {
+  const s = Math.floor((clock.ms + (clock.since ? Date.now() - clock.since : 0)) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+function tick(state) {
+  if (state === 'listening' || state === 'hearing') clock.since ??= Date.now();
+  else if (clock.since) { clock.ms += Date.now() - clock.since; clock.since = null; }
+  if (state === 'off') clock.ms = 0;
+}
+const L = { listener: null, queue: Promise.resolve(), idle: null, state: 'off', timer: null };
+async function toggleListening() {
+  if (L.listener) return stopListening();
+  if (!current()) return toast('Pick or create a chapter first.', 'warn');
+  const listener = new Listener({
+    // in order, one at a time; while a doubt is being answered the queue waits, so nothing said is lost
+    onSegment: (wav) => { L.queue = L.queue.then(() => sendSegment(wav)).catch((e) => console.error('segment', e)); },
+    onState: listenUI,
+  });
+  try { await listener.start(); } catch { return toast('Microphone is blocked. Allow it from the address bar.', 'error'); }
+  L.listener = listener;
+  renderMain();
+}
+async function stopListening() {
+  const l = L.listener;
+  L.listener = null;
+  l?.stop();
+  renderMain();
+  await L.queue;  // let segments already said reach the server, then close the note being drafted
+  flushDraft();
+}
+async function sendSegment(wav) {
+  const fd = new FormData();
+  fd.append('audio', wav, 'a.wav');
+  fd.append('expect', 'auto');
+  fd.append('ctx', JSON.stringify(ctx()));
+  let r;
+  try { r = await turn(api(`/session/${SID}/voice`, { method: 'POST', body: fd })); } catch (e) { return toast(e.message, 'error'); }
+  if (r.note_id) watchNew(r.note_id);
+  setDraft(r.drafting ?? S.draft);
+  if (r.note) armIdleFlush();
+  L.waiting = r.kind === 'waiting';  // "Question Vaani" said on its own: the next stretch is the question
+  listenUI(L.state);
+  if (r.kind === 'empty' || r.kind === 'error') return r.reply && r.kind === 'error' && toast(r.reply, 'warn');
+  if (r.kind === 'note' || r.kind === 'waiting') return;
+  openAssist();
+  if (r.kind !== 'question') return askFlow(r.transcript || '…', Promise.resolve(r));  // quiz, summary
+  clearTimeout(L.idle);  // note-taking waits for the answer: anything said meanwhile is held, then processed
+  L.answering = true;
+  listenUI(L.state);
+  await askFlow(r.question_spoken || r.transcript, resolveAnswer(r));
+  L.answering = false;
+  listenUI(L.state);
+  if (S.draft) armIdleFlush();  // the same draft note carries on after the answer
+}
+function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 20000); }  // quiet for 20 s: save it
+async function flushDraft() {
+  clearTimeout(L.idle);
+  try {
+    const { note_id } = await api(`/session/${SID}/flush`, { method: 'POST' });
+    setDraft('');
+    if (note_id) watchNew(note_id);
+  } catch {}
+}
+async function watchNew(id) {  // a note was handed to the pipeline: show its card and follow it to ready
+  if (S.chapterId) { S.notes = await api(`/chapters/${S.chapterId}/notes`); renderMain(); }
+  watch(id);
+}
+function setDraft(text) {
+  if ((text || '') === (S.draft || '')) return;
+  S.draft = text || '';
+  const el = $('#draft-text');
+  if (el && S.draft) el.textContent = S.draft; else renderMain();
+}
+function listenUI(state) {
+  L.state = state;
+  tick(state);
+  const on = state !== 'off';
+  clearInterval(L.timer);
+  L.timer = on ? setInterval(() => { if (!R.rec) $('#rec-time').textContent = elapsed(); }, 500) : null;
+  $('#recpill').hidden = !on;
+  $('#recpill').classList.toggle('thinking', state === 'paused' || (on && L.answering));
+  $('#recpill').classList.add('listening');
+  $('#rec-time').textContent = on ? elapsed() : '';
+  $('#rec-stop').textContent = 'Stop';
+  $('#rec-label').textContent = L.answering && state === 'listening' ? 'Vaani is answering · notes resume after it'
+    : L.waiting && state === 'listening' ? 'Listening for your question…' : {
+    listening: `Listening · ${current()?.c.name || ''} · notes, or “Question Vaani…”`,
+    hearing: 'Hearing you…',
+    paused: 'Paused while Vaani answers',
+  }[state] || '';
+  document.body.classList.toggle('rec-note', on && state !== 'paused');
+}
 
 function renderScope() {
   document.querySelectorAll('.seg button').forEach((b) => {
@@ -351,7 +484,7 @@ function renderScope() {
 const R = { rec: null, mode: null, t0: 0, timer: null, cancelled: false };
 async function toggleRec(mode) {
   if (R.rec) return R.mode === mode ? stopRec() : toast('Finish the current recording first.', 'warn');
-  if (mode === 'note' && !current()) return toast('Pick or create a chapter first.', 'warn');
+  L.listener?.pause();  // the ask mic and continuous listening must not both hear the question
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch {
     return toast('Microphone is blocked. Allow it from the address bar.', 'error');
@@ -366,22 +499,23 @@ async function toggleRec(mode) {
     Object.assign(R, { rec: null, mode: null });
     document.body.classList.remove('rec-note', 'rec-ask');
     $('#recpill').hidden = true;
-    if (cancelled) return toast('Recording discarded.');
+    if (cancelled) { L.listener?.resume(); return toast('Recording discarded.'); }
     const fd = new FormData();
     fd.append('audio', new Blob(chunks, { type: rec.mimeType }), rec.mimeType.includes('mp4') ? 'a.mp4' : 'a.webm');
-    fd.append('mode', mode);
+    fd.append('expect', 'question');
     fd.append('ctx', JSON.stringify(ctx()));
-    const req = api('/voice', { method: 'POST', body: fd });
-    if (mode === 'note') saveNote(req);
-    else { openAssist(); askFlow('🎙 Transcribing your question…', req); }
+    openAssist();
+    askFlow('🎙 Transcribing your question…', turn(api(`/session/${SID}/voice`, { method: 'POST', body: fd })).then(resolveAnswer))
+      .finally(() => L.listener?.resume());
   };
   Object.assign(R, { rec, mode, t0: Date.now(), cancelled: false });
   rec.start();
-  $('#rec-label').textContent = mode === 'note' ? `Recording note → ${current().c.name}` : 'Recording question';
-  $('#rec-stop').textContent = mode === 'note' ? 'Stop & save' : 'Stop & ask';
+  $('#rec-label').textContent = 'Recording question';
+  $('#rec-stop').textContent = 'Done';
+  $('#recpill').classList.remove('listening', 'thinking');
   $('#rec-time').textContent = '0:00';
   $('#recpill').hidden = false;
-  document.body.classList.add(mode === 'note' ? 'rec-note' : 'rec-ask');
+  document.body.classList.add('rec-ask');
   R.timer = setInterval(() => {
     const s = Math.floor((Date.now() - R.t0) / 1000);
     $('#rec-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -448,14 +582,19 @@ document.addEventListener('click', async (e) => {
         S.notes = S.notes.filter((n) => n.id !== nid);
         return renderMain();
       }
-      case 'goto-note': return await openChapter(b.dataset.cid, b.dataset.nid);
+      case 'goto-note': return await openChapter(b.dataset.cid || S.chapterId, b.dataset.nid);
+      case 'end-convo': {
+        await api(`/session/${SID}/end`, { method: 'POST' });
+        setMode('notetaking');
+        return askFlow('Back to notes', Promise.resolve({ kind: 'end', reply: 'Okay, back to your notes.' }));
+      }
       case 'topic':
         S.topic = b.dataset.topic || null;
         renderMain();
         return $('#main').scrollTo({ top: 0 });
-      case 'rec-note': return await toggleRec('note');
+      case 'rec-note': return await toggleListening();
       case 'rec-ask': return await toggleRec('ask');
-      case 'rec-stop': return stopRec();
+      case 'rec-stop': return R.rec ? stopRec() : stopListening();
       case 'rec-cancel': return stopRec(true);
       case 'type-note':
         $('#typebox').hidden = false;
@@ -557,16 +696,17 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.altKey && e.code === 'KeyN') { e.preventDefault(); toggleRec('note'); }
+  if (e.altKey && e.code === 'KeyN') { e.preventDefault(); toggleListening(); }
   else if (e.altKey && e.code === 'KeyA') { e.preventDefault(); openAssist(); toggleRec('ask'); }
   else if (e.key === 'Escape' && R.rec) stopRec(true);
+  else if (e.key === 'Escape' && L.listener) stopListening();
   else if (e.key === 'Escape') document.body.classList.remove('side-open', 'assist-open');
   else if (e.target.id === 'q' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#ask').requestSubmit(); }
   else if (e.target.closest?.('#typebox') && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#typebox').requestSubmit(); }
   else if (e.target.matches?.('.fc') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.target.classList.toggle('flipped'); }
 });
 
-for (const k of ['speak', 'lang']) {
+for (const k of ['lang']) {
   $('#' + k).value = store.get(k, '');
   $('#' + k).addEventListener('change', () => store.set(k, $('#' + k).value));
 }

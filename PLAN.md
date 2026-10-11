@@ -56,6 +56,53 @@ Confirm the exact model IDs on build.nvidia.com when you create the key. The cat
 - **Push-to-talk, not a wake word.** It's more reliable and private, and the hotkey is enough.
 - **No server session state.** A "confirm" response carries the pending note back to the client.
 
+## 3b. Agents (`backend/app/agents.py`, `tools.py`)
+
+One stream of speech; the agents decide what each part of it is.
+
+**Continuous listening** (`dashboard/listen.js`, same file in `extension/`): the mic stays on, an energy VAD
+against the room's noise floor cuts speech at 4 s pauses (time to think mid-question; trailing silence is
+trimmed before upload), and each piece goes to the session as a 16 kHz WAV.
+
+**Questions are wake-phrase only:** everything is a note unless the student says "Question Vaani". What comes
+after it is the question (said on its own, the next piece is the question); what came before it is still
+note. No LLM guesses note-vs-question any more. Note parts are drafted into one note (`NoteTaker`): a question
+does NOT close the draft, so note-taking resumes after the answer with the same context; the draft is saved
+after 20 s without notes, at 250 words, on a chapter switch or when listening stops. Questions are answered in
+the background (`answer_id`, polled); the client holds note-taking (and pauses the video) until the answer is
+shown; anything said meanwhile is held and processed afterwards, never dropped. Drafts with nothing worth
+noting (filler) are deleted quietly.
+
+| Agent | Job |
+|---|---|
+| `StudySession` | Orchestrator for one sitting: chapter, current page (title, URL, video time, selection), recent notes, the conversation, and the mode (`notetaking` / `conversation`) |
+| `RouterAgent` | Labels each utterance `note` / `question` (incl. follow-ups, rewritten as a standalone question) / `end` ("ok got it") / `summary` / `flashcards` / `quiz` |
+| `TutorAgent` | Answers doubts conversationally (TTS-ready: 2–5 sentences, no markdown) in the student's language, using the session context and tools |
+| `NoteTaker` | Hands notes to the background pipeline (transcribe → distil → link) |
+
+`Agent` is the shared base: a system prompt, tools, and a bounded native tool-calling loop on the NVIDIA
+model (at most 4 tool rounds, then it must answer). Tools are plain functions plus a JSON schema
+(`Tool`): `search_notes` (Atlas Vector Search over the student's notes, scoped to the chapter, subject or
+all) and `web_search` (DuckDuckGo, no key). Sources shown in the UI are only ones a tool actually returned.
+
+**Spoken language, per recording (no setting):** indic-transcribe's language ID picks the language. It is
+near-perfect for Bengali, Tamil, Telugu, Malayalam, Kannada and Hindi, but plain Indian-accented English lands
+in a Hindi-belt class with low confidence. So Hindi or an unsure Hindi-belt guess is transcribed as Hindi;
+if that transcript has no common Hindi words it was English, and is re-transcribed in English. Code-mixed
+speech keeps its Indic language. Then: wake phrase "Question Vaani" (forces a question), then the router.
+
+**Reply language** is one rule for every answer path (tutor, note answers, summaries, "got it"
+acknowledgements): the student's "Reply in" choice, else the language they used, decided in code
+(`routing.spoken_language`: ASR language code, then script, then Hinglish function words). The script of each
+reply is checked in code (`routing.in_language`), and a reply in the wrong language or script is rewritten
+once (`agent.ensure_language`).
+
+API: `POST /api/session/{sid}/voice|text` (`expect: auto` from the main mic, `question` from the ask box),
+`POST /api/session/{sid}/end`. Sessions live in memory for 3 h (lost on restart; persist in Mongo later).
+
+**Next:** TTS for replies (Indic Parler-TTS) and hands-free follow-ups; more tools (fetch a page, the video
+transcript at the current timestamp, save a Q&A as a note).
+
 ## 4. Data model (`backend/app/db.py`, MongoDB Atlas)
 
 - `subjects {name}` → `chapters {subject_id, name}`. Names are unique and case-insensitive (collation index).
@@ -128,7 +175,7 @@ back to cosine so `LINK_MIN` stays in cosine terms.
   The router prompt already tells the LLM to repair ASR errors in technical terms.
 - **Script of English terms:** English words come back in Devanagari, and the output-mode switch had no effect
   in testing. The LLM maps them back; check this in the Phase 1 eval.
-- **Language ID is weak for Hindi** (0.26 top-1 per the model's docs), so the "I speak" picker matters.
+- **Language ID files Indian-accented English under Hindi-belt languages.** Handled by the Hindi-word check; other Indic + English mixes still need real-voice testing.
 - **CPU latency:** a 1B-parameter model on a laptop CPU is slow. Run ASR on a GPU for real use.
 - **LLM JSON drift:** the code slices the outermost `{…}`. If a chosen model misbehaves, add one retry.
 - **Wrong subject/topic:** the confirm dialog plus the Phase 1 move-note feature contain the damage.

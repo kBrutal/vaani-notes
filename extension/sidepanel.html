@@ -19,18 +19,6 @@
 
   <section id="settings" class="settings" hidden>
     <label>Server<input id="api" placeholder="http://localhost:8000" spellcheck="false"></label>
-    <label>I speak
-      <select id="speak">
-        <option value="">Auto-detect</option>
-        <option value="hi">Hindi + English</option><option value="bn">Bengali + English</option>
-        <option value="ta">Tamil + English</option><option value="te">Telugu + English</option>
-        <option value="mr">Marathi + English</option><option value="kn">Kannada + English</option>
-        <option value="ml">Malayalam + English</option><option value="gu">Gujarati + English</option>
-        <option value="pa">Punjabi + English</option><option value="or">Odia + English</option>
-        <option value="as">Assamese + English</option><option value="ur">Urdu + English</option>
-        <option value="en">English</option>
-      </select>
-    </label>
     <label>Reply in
       <select id="lang">
         <option value="">My language</option>
@@ -55,6 +43,11 @@
     <div class="row"><button type="button" class="btn ghost" id="nc-cancel">Cancel</button><button class="btn primary">Create chapter</button></div>
   </form>
 
+  <div id="convo" class="convo" hidden>
+    <span class="live-dot"></span><span>Follow-up? Start with “Question Vaani”</span>
+    <button class="btn sm" id="end-convo">Back to notes</button>
+  </div>
+
   <nav class="tabs" role="tablist">
     <button data-tab="note" role="tab">Note</button>
     <button data-tab="ask" role="tab">Ask</button>
@@ -63,9 +56,9 @@
   <main id="tab-note" class="pane">
     <div id="context" class="context"></div>
     <div class="recorder">
-      <button id="mic" class="mic-big" title="Speak a note (Alt+Shift+R)" data-ic="mic"></button>
-      <div id="rec-status" class="rec-status">Tap and explain what you understood</div>
-      <button id="cancel-rec" class="btn ghost sm" hidden>Cancel</button>
+      <button id="mic" class="mic-big" title="Start / stop listening (Alt+Shift+R)" data-ic="mic"></button>
+      <div id="rec-status" class="rec-status">Tap to start listening</div>
+      <div class="hint">The mic stays on: everything you explain is noted. To ask, start with <b>“Question Vaani”</b></div>
     </div>
     <details class="type-note">
       <summary>Type instead</summary>
@@ -97,6 +90,7 @@
     </form>
   </main>
 
+  <script src="listen.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
