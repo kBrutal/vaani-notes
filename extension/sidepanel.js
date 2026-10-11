@@ -18,7 +18,7 @@ const ic = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curre
 document.querySelectorAll('[data-ic]').forEach((el) => el.insertAdjacentHTML('afterbegin', ic(el.dataset.ic)));
 
 // ---------- settings (chrome.storage, shared with the background worker) ----------
-const S = { api: 'http://localhost:8000', chapter: '', speak: '', lang: '', scope: 'chapter', tab: 'note', lib: [] };
+const S = { api: 'http://localhost:8000', chapter: '', lang: '', scope: 'chapter', tab: 'note', lib: [], sid: '' };
 const save = (k, v) => { S[k] = v; chrome.storage.local.set({ [k]: v }); };
 
 async function api(path, opts = {}) {
@@ -62,7 +62,12 @@ async function loadLib() {
 }
 const currentSubject = () => S.lib.find((s) => s.chapters.some((c) => c.id === S.chapter));
 
-$('#chapter').addEventListener('change', (e) => { save('chapter', e.target.value); notice(''); loadRecent(); });
+$('#chapter').addEventListener('change', (e) => {
+  if (S.draft) flushDraft();  // the draft belongs to the chapter it was spoken in
+  save('chapter', e.target.value);
+  notice('');
+  loadRecent();
+});
 $('#new-chapter-btn').addEventListener('click', () => {
   $('#new-chapter').hidden = !$('#new-chapter').hidden;
   if (!$('#new-chapter').hidden) {
@@ -137,9 +142,9 @@ const pageSource = () => {
 
 // ---------- recording ----------
 const R = { rec: null, mode: null, timer: null, cancelled: false, resume: false };
-async function toggleRec(mode) {
+async function toggleRec(mode) {  // the ask-tab mic: one question, press to start and stop
   if (R.rec) return R.mode === mode ? stopRec() : null;
-  if (mode === 'note' && !S.chapter) return notice('Pick a chapter first (or create one with +).');
+  L.listener?.pause();  // continuous listening must not hear the same question
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch {
     notice('Microphone access is needed. Allow it in the tab that just opened, then try again.');
@@ -159,44 +164,38 @@ async function toggleRec(mode) {
     Object.assign(R, { rec: null, mode: null });
     recUI(null);
     if (resume) readPage({ resume: true });
-    if (cancelled) return;
+    if (cancelled) return L.listener?.resume();
     const fd = new FormData();
     fd.append('audio', new Blob(chunks, { type: rec.mimeType }), 'a.webm');
-    fd.append('mode', mode);
-    fd.append('ctx', JSON.stringify({ ...ctx(), speak_lang: S.speak || null, source }));
-    const req = api('/voice', { method: 'POST', body: fd });
-    if (mode === 'note') saveNote(req);
-    else askFlow('🎙 Transcribing your question…', req);
+    fd.append('expect', 'question');
+    fd.append('ctx', JSON.stringify({ ...ctx(), source }));
+    askFlow('🎙 Transcribing your question…', turn(api(`/session/${S.sid}/voice`, { method: 'POST', body: fd })).then(resolveAnswer))
+      .finally(() => L.listener?.resume());
   };
   Object.assign(R, { rec, mode, cancelled: false });
   rec.start();
   recUI(mode);
   const t0 = Date.now();
-  R.timer = setInterval(() => {
-    if (mode === 'note') $('#rec-status').textContent = `Listening… ${fmtT(Math.floor((Date.now() - t0) / 1000))} · tap to save`;
-  }, 250);
+
 }
 function stopRec(cancel = false) { R.cancelled = cancel; R.rec?.stop(); }
 function recUI(mode) {
-  const note = mode === 'note';
-  $('#mic').classList.toggle('recording', note);
-  $('#mic').innerHTML = ic(note ? 'stop' : 'mic');
-  $('#cancel-rec').hidden = !note;
-  if (!note) $('#rec-status').textContent = 'Tap and explain what you understood';
   $('#ask-mic').classList.toggle('recording', mode === 'ask');
   $('#ask-mic').innerHTML = ic(mode === 'ask' ? 'stop' : 'mic');
 }
-$('#mic').addEventListener('click', () => toggleRec('note'));
-$('#cancel-rec').addEventListener('click', () => stopRec(true));
+$('#mic').addEventListener('click', () => toggleListening());
 $('#ask-mic').addEventListener('click', () => toggleRec('ask'));
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && R.rec) stopRec(true); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && R.rec) stopRec(true);
+  else if (e.key === 'Escape' && L.listener) stopListening();
+});
 
 // Alt+Shift+R from any page arrives here via the background worker
 chrome.runtime.onMessage.addListener((msg, _, reply) => {
   if (msg.type === 'toggle-recording') {
     chrome.storage.session.remove('autostart');
     showTab('note');
-    toggleRec('note');
+    toggleListening();
     reply(true);
   }
   if (msg.type === 'refresh') loadLib();
@@ -225,7 +224,9 @@ async function loadRecent() {
   if (!S.chapter) { $('#recent').innerHTML = '<div class="empty">Pick a chapter to see its notes here.</div>'; return; }
   try {
     const notes = (await api(`/chapters/${S.chapter}/notes`)).reverse().slice(0, 8);
-    $('#recent').innerHTML = notes.map(noteCard).join('') || '<div class="empty">No notes yet. Tap the mic and explain a concept.</div>';
+    const draft = S.draft ? `<div class="note pending"><span class="label">Drafting a note · saved when you pause a while, ask, or stop</span>
+      <p class="said">${esc(S.draft)}</p></div>` : '';
+    $('#recent').innerHTML = draft + notes.map(noteCard).join('') || '<div class="empty">No notes yet. Tap the mic and explain a concept.</div>';
     notes.filter((n) => n.stage && n.stage !== 'failed').forEach((n) => watch(n.id));
   } catch (e) {
     $('#recent').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -277,6 +278,118 @@ $('#type-form').addEventListener('submit', (e) => {
   saveNote(post('/text', { text, mode: 'note', ctx: { chapter_id: S.chapter, source: pageSource() } }));
 });
 
+// ---------- study session: the agents decide note vs doubt, and keep the conversation's context ----------
+function setMode(mode) { $('#convo').hidden = mode !== 'conversation'; }
+async function turn(promise) {
+  const r = await promise;
+  if (r.mode) setMode(r.mode);
+  return r;
+}
+async function resolveAnswer(r) {  // doubts are answered in the background; wait for this one
+  if (!r.answer_id) return r;
+  for (;;) {
+    const a = await api(`/session/${S.sid}/answers/${r.answer_id}`);
+    if (a.status !== 'pending') { if (a.mode) setMode(a.mode); return a; }
+    await sleep(600);
+  }
+}
+
+// ---------- continuous listening: one mic for notes and doubts ----------
+const clock = { ms: 0, since: null };  // listening time; stands still while paused for an answer
+const elapsed = () => {
+  const s = Math.floor((clock.ms + (clock.since ? Date.now() - clock.since : 0)) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+function tick(state) {
+  if (state === 'listening' || state === 'hearing') clock.since ??= Date.now();
+  else if (clock.since) { clock.ms += Date.now() - clock.since; clock.since = null; }
+  if (state === 'off') clock.ms = 0;
+}
+const L = { listener: null, queue: Promise.resolve(), idle: null, timer: null };
+async function toggleListening() {
+  if (L.listener) return stopListening();
+  if (!S.chapter) return notice('Pick a chapter first (or create one with +).');
+  const listener = new Listener({
+    // in order, one at a time; while a doubt is being answered the queue waits, so nothing said is lost
+    onSegment: (wav) => { L.queue = L.queue.then(() => sendSegment(wav)).catch((e) => console.error('segment', e)); },
+    onState: listenUI,
+  });
+  try { await listener.start(); } catch {
+    notice('Microphone access is needed. Allow it in the tab that just opened, then try again.');
+    return chrome.tabs.create({ url: 'permission.html' });
+  }
+  notice('');
+  L.listener = listener;
+}
+async function stopListening() {
+  const l = L.listener;
+  L.listener = null;
+  l?.stop();
+  await L.queue;  // segments already said still reach the server; then close the note being drafted
+  flushDraft();
+}
+async function sendSegment(wav) {
+  await readPage();  // the page as it is now: title, video time, selection
+  const source = pageSource();
+  const fd = new FormData();
+  fd.append('audio', wav, 'a.wav');
+  fd.append('expect', 'auto');
+  fd.append('ctx', JSON.stringify({ ...ctx(), source }));
+  let r;
+  try { r = await turn(api(`/session/${S.sid}/voice`, { method: 'POST', body: fd })); } catch (e) { return notice(e.message); }
+  if (r.note_id) watchNew(r.note_id);
+  setDraft(r.drafting ?? S.draft);
+  if (r.note) armIdleFlush();
+  L.waiting = r.kind === 'waiting';  // "Question Vaani" said on its own: the next stretch is the question
+  if (r.kind === 'error') return notice(r.reply);
+  if (r.kind === 'empty' || r.kind === 'note' || r.kind === 'waiting') return;
+  if (r.kind !== 'question') return askFlow(r.transcript || '…', Promise.resolve(r));  // quiz, summary
+  clearTimeout(L.idle);  // note-taking (and the video) waits for the answer; speech meanwhile is held, not lost
+  L.answering = true;
+  const p = await readPage({ pause: true });
+  await askFlow(r.question_spoken || r.transcript, resolveAnswer(r));
+  if (p?.playing) readPage({ resume: true });
+  L.answering = false;
+  if (S.draft) armIdleFlush();  // the same draft note carries on after the answer
+}
+function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 20000); }  // quiet for 20 s: save it
+async function flushDraft() {
+  clearTimeout(L.idle);
+  try {
+    const { note_id } = await api(`/session/${S.sid}/flush`, { method: 'POST' });
+    setDraft('');
+    if (note_id) watchNew(note_id);
+  } catch {}
+}
+async function watchNew(id) { await loadRecent(); watch(id); }
+function setDraft(text) {
+  if ((text || '') === (S.draft || '')) return;
+  S.draft = text || '';
+  loadRecent();
+}
+function listenUI(state) {
+  tick(state);
+  const on = state !== 'off';
+  $('#mic').classList.toggle('recording', on && state !== 'paused');
+  $('#mic').innerHTML = ic(on ? 'stop' : 'mic');
+  const text = () => ({
+    off: 'Tap to start listening',
+    listening: L.answering ? `Vaani is answering · notes resume after it · ${elapsed()}`
+      : L.waiting ? `Listening for your question… ${elapsed()}` : `Listening ${elapsed()} · notes, or “Question Vaani…”`,
+    hearing: `Hearing you… ${elapsed()}`,
+    paused: `Paused while Vaani answers · ${elapsed()}`,
+  }[state]);
+  $('#rec-status').textContent = text();
+  clearInterval(L.timer);
+  L.timer = on ? setInterval(() => { $('#rec-status').textContent = text(); }, 500) : null;
+}
+$('#end-convo').addEventListener('click', async () => {
+  await api(`/session/${S.sid}/end`, { method: 'POST' }).catch(() => {});
+  setMode('notetaking');
+  askFlow('Back to notes', Promise.resolve({ kind: 'end', reply: 'Okay, back to your notes.' }));
+  showTab('note');
+});
+
 // ---------- ask ----------
 function prose(t, headings) {
   const out = [];
@@ -292,7 +405,21 @@ function prose(t, headings) {
   flush();
   return out.join('');
 }
+const safeUrl = (u) => (/^https?:\/\//.test(u || '') ? u : '#');
+function sourceChips(r) {
+  const steps = r.steps?.length ? `<div class="steps-used">${r.steps.map((s) => `${s.tool === 'web_search' ? '🔎 Searched the web' : '📒 Searched your notes'}${s.query ? `: “${esc(s.query)}”` : ''}`).join('<br>')}</div>` : '';
+  const chips = r.sources?.length ? `<div class="sources">${r.sources.map((s) => s.type === 'web'
+    ? `<a class="src-chip" href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener">🌐 ${esc(s.title)}</a>`
+    : `<a class="src-chip" href="${esc(S.api)}" target="_blank" title="${esc(s.chapter)}">📒 ${esc(s.title)}</a>`).join('')}</div>` : '';
+  return steps + chips;
+}
 function renderReply(r) {
+  if (r.kind === 'question') {
+    const [main, extra] = String(r.reply || '').split(/Not from your notes:/i);
+    return `<div class="tutor-tag">Vaani</div><div class="prose">${prose(main)}</div>${extra ? `<div class="outside">${prose(extra)}</div>` : ''}${sourceChips(r)}`;
+  }
+  if (r.kind === 'end') return `<p class="muted">↩ ${esc(r.reply)}</p>`;
+  if (r.kind === 'empty' || r.kind === 'error') return `<p class="muted">${esc(r.reply)}</p>`;
   if (r.status === 'empty') return `<p class="muted">${esc(r.answer)}</p>`;
   const head = r.scope ? `<div class="scope-chip">${esc(r.scope)}${r.coverage ? ` · ${esc(r.coverage)}` : ''}</div>` : '';
   if (r.cards) {
@@ -327,7 +454,10 @@ async function askFlow(label, promise) {
   $('#thread').scrollTop = $('#thread').scrollHeight;
 }
 const ctx = () => ({ chapter_id: S.chapter || null, scope: S.scope, answer_lang: S.lang || null });
-const askText = (text, intent) => askFlow(text, post('/text', { text, mode: 'ask', intent, ctx: ctx() }));
+// quick buttons go straight to the study tools; everything else is a turn in the study session
+const askText = (text, intent) => askFlow(text, intent
+  ? post('/text', { text, mode: 'ask', intent, ctx: ctx() })
+  : turn(post(`/session/${S.sid}/text`, { text, expect: 'question', ctx: { ...ctx(), source: pageSource() } })).then(resolveAnswer));
 $('#ask-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('#q').value.trim();
@@ -390,28 +520,28 @@ $('#api').addEventListener('change', (e) => {
   $('#open-dash').href = S.api;
   loadLib();
 });
-$('#speak').addEventListener('change', (e) => save('speak', e.target.value));
 $('#lang').addEventListener('change', (e) => save('lang', e.target.value));
 chrome.storage.session.onChanged.addListener((ch) => {
   if (ch.notice?.newValue) { notice(ch.notice.newValue); chrome.storage.session.remove('notice'); }
 });
 
 (async () => {
-  Object.assign(S, await chrome.storage.local.get(['api', 'chapter', 'speak', 'lang', 'scope', 'tab']));
+  Object.assign(S, await chrome.storage.local.get(['api', 'chapter', 'lang', 'scope', 'tab']));
   $('#api').value = S.api;
-  $('#speak').value = S.speak;
   $('#lang').value = S.lang;
   $('#open-dash').href = S.api;
   renderScope();
   showTab(S.tab);
   recUI(null);
-  const { notice: pending, autostart } = await chrome.storage.session.get(['notice', 'autostart']);
+  const { notice: pending, autostart, sid } = await chrome.storage.session.get(['notice', 'autostart', 'sid']);
+  S.sid = sid || crypto.randomUUID();  // one study session per browser session; the agents keep its context
+  if (!sid) chrome.storage.session.set({ sid: S.sid });
   if (pending) { notice(pending); chrome.storage.session.remove('notice'); }
   readPage();
   await loadLib();
   if (autostart && Date.now() - autostart < 5000) {  // the panel was opened by Alt+Shift+R
     chrome.storage.session.remove('autostart');
     showTab('note');
-    toggleRec('note');
+    toggleListening();
   }
 })();

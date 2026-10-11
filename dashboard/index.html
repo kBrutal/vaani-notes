@@ -19,25 +19,7 @@
         <input name="name" placeholder="New subject…" autocomplete="off" aria-label="New subject name" required>
         <button class="icon-btn" title="Add subject" data-ic="plus"></button>
       </form>
-      <label class="side-foot">
-        <span>I speak</span>
-        <select id="speak" aria-label="Language I speak">
-          <option value="">Auto-detect</option>
-          <option value="hi">Hindi + English</option>
-          <option value="bn">Bengali + English</option>
-          <option value="ta">Tamil + English</option>
-          <option value="te">Telugu + English</option>
-          <option value="mr">Marathi + English</option>
-          <option value="kn">Kannada + English</option>
-          <option value="ml">Malayalam + English</option>
-          <option value="gu">Gujarati + English</option>
-          <option value="pa">Punjabi + English</option>
-          <option value="or">Odia + English</option>
-          <option value="as">Assamese + English</option>
-          <option value="ur">Urdu + English</option>
-          <option value="en">English</option>
-        </select>
-      </label>
+      <p class="side-foot">Speak any Indian language, English, or a mix. The language is detected for each recording.</p>
     </aside>
 
     <main id="main" class="main"></main>
@@ -71,6 +53,10 @@
         <button class="btn" data-act="quick" data-intent="flashcards"><span data-ic="cards"></span>Flashcards</button>
         <button class="btn" data-act="quick" data-intent="quiz"><span data-ic="quiz"></span>Quiz</button>
       </div>
+      <div id="convo" class="convo" hidden>
+        <span class="live-dot"></span><span>Follow-up? Start with “Question Vaani”</span>
+        <button class="btn sm" data-act="end-convo">Back to notes</button>
+      </div>
       <div id="thread" class="thread" aria-live="polite">
         <div class="thread-hint">
           <p>Ask in any language. Answers come from <b>your own notes</b>.</p>
@@ -95,6 +81,7 @@
     <button class="btn sm ghost-light" data-act="rec-cancel">Cancel</button>
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="listen.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

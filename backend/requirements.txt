@@ -4,6 +4,7 @@ python-multipart
 openai
 numpy
 pymongo
+ddgs
 # ASR: bodhan-ai/indic-transcribe-core (transformers path) + browser-audio decoding
 torch
 torchaudio

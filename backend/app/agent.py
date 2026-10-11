@@ -9,7 +9,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from . import asr, db, llm
-from .routing import route_typed, spread
+from .routing import in_language, route_typed, script_of, spoken_language, spread
 
 log = logging.getLogger("vaani")
 LINK_MIN = float(os.getenv("LINK_MIN", "0.4"))  # ponytail: tuned on 5 Polity notes for nemotron-3-embed-1b (related ~0.4+, unrelated ~0.2-0.3); retune on real data
@@ -74,9 +74,39 @@ Return ONLY a JSON object:
   Otherwise null (the app then uses the scope the student selected).
 - summary: they want an overview or revision sheet. count: number of flashcards/questions if they said one."""
 
+def reply_lang(answer_lang, text, lang_code=None):
+    """The student's "Reply in" choice, else the language they spoke or typed. Shared by every answer path."""
+    return answer_lang or spoken_language(text, lang_code)
+
+
+LANG_RULE = """Write the ENTIRE reply in {lang}, whatever language the question, notes or sources are in.
+Use that language's own script (Tamil in Tamil script, Hindi in Devanagari, Bengali in Bengali script); if it
+says Latin script, write it in Latin letters. Keep technical terms (Article numbers, Acts, case names) in
+English where natural."""
+
+def ensure_language(text, lang):
+    """Models sometimes ignore the reply language (an English answer to "Reply in Tamil", Devanagari for Bengali).
+    Check the script in code; if it's wrong, rewrite once. Costs a call only when needed."""
+    if not text or in_language(text, lang):
+        return text
+    script = script_of(lang)
+    target = f"{lang}, written in {script} script letters (not romanised)" if script else lang
+    prompt = (f"Rewrite the text below in {target}. Keep the meaning, tone and every fact; change only the language "
+              "and script. Keep Article numbers and case names in English. Output only the rewritten text.")
+    for think in (False, True):  # the quick pass sometimes romanises; reasoning follows the script rule
+        try:
+            out = llm.chat(prompt, text, think=think).strip()
+        except Exception:
+            log.exception("language rewrite failed")
+            continue
+        if out and in_language(out, lang):
+            return out
+    return text  # a safety net must never break the answer
+
+
 GENERATE = """You help an Indian student revise from their OWN notes (JSON in the user message).
 Write directly about the subject; never refer to "the student", "your notes say" or who said what.
-Write all text in {lang}. Keep technical terms (Article numbers, Acts, case names) in English where natural.
+{lang_rule}
 {task}
 Return ONLY JSON."""
 
@@ -99,14 +129,14 @@ that is not in the notes. Neutral textbook voice. Return ONLY JSON: {{"summary":
 
 # ---------- note mode (background) ----------
 
-def process_note(nid, speak_lang=None, audio=None):
+def process_note(nid, audio=None):
     """Fill in a pending note: transcribe (voice only) -> structure -> embed + link -> ready.
     Each step updates the note's `stage`, which the UI polls. Any failure keeps the transcript for a retry."""
     doc, topic = db.raw(nid), None
     try:
         if audio:
             try:
-                text, lang = asr.transcribe(audio, speak_lang)
+                text, lang = asr.transcribe(audio)  # language detected per clip
             finally:
                 os.unlink(audio)
             if not text.strip():
@@ -124,7 +154,7 @@ def process_note(nid, speak_lang=None, audio=None):
                         "detected_language": lang, "utterance": text}, ensure_ascii=False),
             think=True)  # background: quality over speed
         if not r.get("note"):
-            return db.fail(nid, "Didn't find a concept to note in that.")
+            return db.delete("note", nid)  # filler ("ok got it", "hmm"): nothing worth noting, drop it quietly
         db.update(nid, stage="linking")
         name = (r.get("topic") or "General").strip()
         topic = next((t for t in ch["topics"] if t.lower() == name.lower()), name)  # reuse existing spelling
@@ -187,9 +217,12 @@ def ask(text, lang, ctx, intent=None):
     if not material:
         return {**base, "status": "empty", "answer": f"No notes in {label} yet."}
     out = llm.chat_json(
-        GENERATE.format(lang=ctx.get("answer_lang") or "the same language and script mix the student used",
+        GENERATE.format(lang_rule=LANG_RULE.format(lang=reply_lang(ctx.get("answer_lang"), text, lang)),
                         task=TASKS[intent].format(n=r.get("count") or 8)),
-        f"Request: {text}\nNotes: {json.dumps(material, ensure_ascii=False)}")
+        f"Request: {text}\nNotes: {json.dumps(material, ensure_ascii=False)}\n"
+        f"Reply language: {reply_lang(ctx.get('answer_lang'), text, lang)}")
+    if out.get("answer"):
+        out["answer"] = ensure_language(out["answer"], reply_lang(ctx.get("answer_lang"), text, lang))
     return {**base, "status": "ok", **out}
 
 

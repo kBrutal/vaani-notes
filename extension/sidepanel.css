@@ -105,6 +105,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .said { margin: 6px 0 0; color: var(--fg2); font-style: italic; }
 .note .row { justify-content: flex-start; margin-top: 8px; }
 
+.convo { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 7px 9px; border: 1px solid var(--accent-line); border-radius: 11px; background: var(--accent-soft); font-size: 12px; color: var(--accent); }
+.convo span:nth-child(2) { flex: 1; }
+.live-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); animation: blink 1.4s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.tutor-tag { margin-bottom: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.steps-used { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+.sources { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.src-chip { max-width: 100%; overflow: hidden; padding: 2px 9px; border: 1px solid var(--line2); border-radius: 99px; font-size: 11.5px; color: var(--fg2); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.src-chip:hover { border-color: var(--accent); color: var(--accent); }
+
 /* ask tab */
 #tab-ask { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .ask-top { padding: 12px 12px 8px; border-bottom: 1px solid var(--line); }

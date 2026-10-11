@@ -30,7 +30,14 @@ uvicorn app.main:app --reload --env-file ../.env
 Open http://localhost:8000. Create a subject and its chapters in the sidebar, pick a chapter, then press
 **Add note by voice** (Alt+N) and explain the concept. The topic is assigned automatically. Ask questions,
 or get summaries, flashcards and quizzes, from the right-hand panel (Alt+A to ask by voice).
-Set "I speak" to your language, e.g. "Hindi + English". Auto-detect is weak for Hindi.
+Press **Start listening** once: the mic stays on while you study, and everything you explain is drafted into
+notes. To ask a doubt, say **"Question Vaani"** and then the question; a 4-second pause ends it. Note-taking
+waits while the answer appears in the chat, then carries on with the same note. If you say a statement and
+then "Question Vaani …" in one breath, the statement still goes to your notes. Start it with **"Question Vaani"** to be sure it's treated as a
+question ("Question Vaani, procedure established by law aur due process mein kya farak hai?"). The study agents recognise it as a question, answer it in the chat using your notes and the web,
+handle follow-ups, and go back to note-taking when you say "ok, got it".
+Speak any Indian language, English, or a mix. The language is detected for every recording, so there's
+no language setting.
 
 Notes, chapters and embeddings live in MongoDB Atlas. Semantic search uses Atlas Vector Search on the same
 `notes` collection, so there is no separate vector database.
@@ -48,7 +55,7 @@ Then:
 - **Alt+Shift+R** on any page starts or stops a voice note, opening the panel if needed.
 - **Right-click selected text → Save to Vaani as a note** files it in the current chapter.
 - **Ask tab:** questions, Summary, Flashcards and Quiz, scoped to the chapter, the subject or all notes.
-- **Settings (gear icon):** server URL (for a deployed backend), "I speak" and the reply language.
+- **Settings (gear icon):** server URL (for a deployed backend) and the reply language.
   Change the shortcuts at `chrome://extensions/shortcuts`.
 
 ## Test

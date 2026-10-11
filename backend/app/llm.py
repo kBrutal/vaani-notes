@@ -13,13 +13,20 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
 ASK_THINKING = os.getenv("LLM_THINKING", "off") == "on"
 
 
-def chat_json(system, user, think=ASK_THINKING):
+def chat(system, user, think=ASK_THINKING):
     r = client.chat.completions.create(
         model=CHAT_MODEL, temperature=0.2, max_tokens=8192,
         extra_body={"chat_template_kwargs": {"enable_thinking": think}},
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
-    s = r.choices[0].message.content
-    # ponytail: models don't all honour response_format, so slice out the JSON object
+    return r.choices[0].message.content or ""
+
+
+def chat_json(system, user, think=ASK_THINKING):
+    return parse_json(chat(system, user, think))
+
+
+def parse_json(s):
+    # ponytail: models don't all honour response_format, so slice out the outermost JSON object
     return json.loads(s[s.find("{"): s.rfind("}") + 1])
 
 
