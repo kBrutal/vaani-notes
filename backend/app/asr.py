@@ -71,11 +71,11 @@ HINDI_WORDS = re.compile(r"(?:^|\s)(?:है|हैं|के|का|की|क�
                          r"इसका|उसका|गया|गई|रहा|रही|सकते|चाहिए)(?=\s|$|[,.?!।])")
 
 
-def english_head(path, seconds=3.5):
-    """The first few seconds decoded as English: where the wake phrase sits, whatever language follows."""
+def english_head(path, seconds=3.5, lang="en"):
+    """The first few seconds decoded in one language (English by default): where the wake phrase sits."""
     model, _, _ = _load()
     with _lock:
-        return model(decode(path)[:int(seconds * SR)], lang="en").strip()
+        return model(decode(path)[:int(seconds * SR)], lang=lang).strip()
 
 
 def transcribe(path, lang=None):

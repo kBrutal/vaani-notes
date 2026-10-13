@@ -12,8 +12,8 @@ const frame = (amp) => Float32Array.from({ length: FRAME }, (_, i) => amp * Math
 const frames = (ms, amp) => Array.from({ length: Math.round((ms / 1000) * RATE / FRAME) }, () => frame(amp));
 
 (async () => {
-  const segments = [], states = [];
-  const l = new sandbox.Listener({ onSegment: (b) => segments.push(b), onState: (s) => states.push(s) });
+  const segments = [], states = [], peeks = [];
+  const l = new sandbox.Listener({ onSegment: (b) => segments.push(b), onState: (s) => states.push(s), onPeek: (b) => peeks.push(b) });
   Object.assign(l, { rate: RATE, paused: false, proc: {} });  // as if start() ran
   l.reset();
   const feed = (fs_) => fs_.forEach((f) => l.frame(f));
@@ -33,11 +33,21 @@ const frames = (ms, amp) => Array.from({ length: Math.round((ms / 1000) * RATE /
   feed(frames(4300, 0));      // -> segment 2 (one segment, not two)
 
   assert.strictEqual(segments.length, 2, `expected 2 segments, got ${segments.length}`);
+  assert.strictEqual(peeks.length, 2, `one early peek per segment that lasted 2.5 s+, got ${peeks.length}`);
+  const peekSecs = (Buffer.from(await peeks[0].arrayBuffer()).length - 44) / 2 / 16000;
+  assert.ok(peekSecs >= 2.4 && peekSecs < 2.7, `peek should be the first ~2.5 s, got ${peekSecs.toFixed(2)} s`);
   const header = Buffer.from(await segments[0].arrayBuffer());
   assert.strictEqual(header.toString('ascii', 0, 4), 'RIFF');
   assert.strictEqual(header.readUInt32LE(24), 16000);  // 16 kHz out
   const secs = (header.length - 44) / 2 / 16000;
   assert.ok(secs > 2 && secs < 3, `segment 1 should be ~2 s of speech + pre-roll + a short tail (trailing silence trimmed), got ${secs.toFixed(2)} s`);
   assert.deepStrictEqual([...new Set(states)], ['hearing', 'listening', 'paused']);
+
+  // finish(): mid-sentence, hand over what was said so far (the "send my question" click)
+  feed(frames(1500, 0.3));
+  l.stop = () => {};  // no real audio graph in this test
+  assert.strictEqual(l.finish(), true);
+  assert.strictEqual(segments.length, 3, 'finish() should emit the speech in progress');
+  assert.strictEqual(l.finish(), false);  // nothing in progress: nothing emitted
   console.log('ok');
 })();

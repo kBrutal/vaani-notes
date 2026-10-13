@@ -8,19 +8,23 @@ const VAD = {
   minSpeechMs: 500,    // shorter segments are coughs and clicks: dropped
   maxSegmentMs: 40000, // the ASR prefers <= 30-45 s per piece
   preRollMs: 400,      // keep the onset that came before the detector fired
+  peekMs: 2500,        // onPeek gets the first this-many ms of a segment while it's still being spoken
 };
 
 class Listener {
-  constructor({ onSegment, onState = () => {} }) {
-    this.onSegment = onSegment;
-    this.onState = onState;
+  // getStream: another audio source (e.g. a captured browser tab) instead of the mic. playback: also play it
+  // to the speakers (Chrome mutes a captured tab otherwise). vad: overrides for VAD. onSegment(wav, seconds).
+  // onPeek(wav): the opening of a segment, early, e.g. to spot a wake phrase before the speaker has finished.
+  constructor({ onSegment, onState = () => {}, onPeek = null, getStream = null, playback = false, vad = {} }) {
+    Object.assign(this, { onSegment, onState, onPeek, getStream, playback });
+    this.vad = { ...VAD, ...vad };
   }
 
   async start() {
     // Created before any await, while the click still counts as a user gesture (else Chrome starts it
     // suspended and no audio ever arrives); resume() covers the rest.
     this.ctx = new AudioContext();
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    this.stream = this.getStream ? await this.getStream() : await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     await this.ctx.resume();
@@ -31,25 +35,35 @@ class Listener {
     this.proc = this.ctx.createScriptProcessor(4096, 1, 1);
     this.proc.onaudioprocess = (e) => this.frame(new Float32Array(e.inputBuffer.getChannelData(0)));
     this.src.connect(this.proc);
+    if (this.playback) this.src.connect(this.ctx.destination);
     this.proc.connect(this.ctx.destination);  // outputs silence; needed for onaudioprocess to fire
     this.paused = false;
     this.reset();
     this.onState('listening');
   }
 
-  stop() {
+  stop() {  // safe to call twice
+    if (!this.ctx) return;
     this.proc?.disconnect();
     this.src?.disconnect();
     this.stream?.getTracks().forEach((t) => t.stop());
-    this.ctx?.close();
-    this.proc = null;
+    this.ctx.close();
+    this.ctx = this.proc = null;
     this.onState('off');
+  }
+
+  finish() {  // stop now, handing over whatever was being said (e.g. "send my question" clicked)
+    const { seg, speechMs } = this;
+    this.reset();
+    this.stop();
+    if (seg && speechMs >= this.vad.minSpeechMs) this.onSegment(toWav(seg, this.rate), (seg.length * seg[0].length) / this.rate);
+    return !!(seg && speechMs >= this.vad.minSpeechMs);
   }
 
   pause() { this.paused = true; this.reset(); this.onState('paused'); }   // e.g. while Vaani answers a doubt
   resume() { if (this.proc) { this.paused = false; this.onState('listening'); } }
 
-  reset() { this.pre = []; this.seg = null; this.loudMs = 0; this.silentMs = 0; this.speechMs = 0; }
+  reset() { this.pre = []; this.seg = null; this.loudMs = 0; this.silentMs = 0; this.speechMs = 0; this.peeked = false; }
 
   frame(x) {
     if (this.paused) return;
@@ -64,9 +78,9 @@ class Listener {
 
     if (!this.seg) {
       this.pre.push(x);
-      while (this.pre.length * ms > VAD.preRollMs) this.pre.shift();
+      while (this.pre.length * ms > this.vad.preRollMs) this.pre.shift();
       this.loudMs = loud ? this.loudMs + ms : 0;
-      if (this.loudMs >= VAD.startMs) {
+      if (this.loudMs >= this.vad.startMs) {
         this.seg = [...this.pre];
         this.speechMs = this.loudMs;
         this.silentMs = 0;
@@ -76,12 +90,16 @@ class Listener {
     }
     this.seg.push(x);
     if (loud) { this.speechMs += ms; this.silentMs = 0; } else this.silentMs += ms;
-    if (this.silentMs >= VAD.endSilenceMs || this.seg.length * ms >= VAD.maxSegmentMs) {
-      const trim = Math.max(0, Math.floor((this.silentMs - VAD.keepTailMs) / ms));
+    if (this.onPeek && !this.peeked && this.seg.length * ms >= this.vad.peekMs) {
+      this.peeked = true;
+      this.onPeek(toWav(this.seg, this.rate));
+    }
+    if (this.silentMs >= this.vad.endSilenceMs || this.seg.length * ms >= this.vad.maxSegmentMs) {
+      const trim = Math.max(0, Math.floor((this.silentMs - this.vad.keepTailMs) / ms));
       const seg = this.seg.slice(0, this.seg.length - trim), { speechMs } = this;
       this.reset();
       this.onState('listening');
-      if (speechMs >= VAD.minSpeechMs) this.onSegment(toWav(seg, this.rate));
+      if (speechMs >= this.vad.minSpeechMs) this.onSegment(toWav(seg, this.rate), (seg.length * ms) / 1000);
     }
   }
 }

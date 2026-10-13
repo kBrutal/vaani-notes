@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import threading
 from contextlib import asynccontextmanager
@@ -21,7 +22,8 @@ class Ctx(BaseModel):
     chapter_id: str | None = None   # required for mode=note
     scope: Literal["chapter", "subject", "all"] = "chapter"  # default scope for mode=ask
     answer_lang: str | None = None  # e.g. "Hindi", "Tamil", "Hinglish ..."; None = reply in the language spoken
-    source: dict | None = None      # {type: web|book, url, title, t, selection, ref}
+    source: dict | None = None      # {type: web|book|lecture, url, title, t, selection, ref}
+    lecture_on: bool = False        # lecture audio is being captured: the mic is for "Question Vaani" only
 
 
 class TextIn(BaseModel):
@@ -166,9 +168,42 @@ def session_answer(sid: str, aid: str):
 
 
 @app.post("/api/session/{sid}/flush")
-def session_flush(sid: str):
-    """The student went quiet or stopped listening: save the note being drafted. Returns its id (or null)."""
-    return {"note_id": agents.session(sid).flush()}
+def session_flush(sid: str, which: Literal["notes", "lecture", "all"] = "all"):
+    """Save what's being drafted: the student's notes, the lecture's, or both."""
+    ids = agents.session(sid).flush(which)
+    return {"note_id": ids[0] if ids else None, "note_ids": ids}
+
+
+@app.post("/api/wake")
+def wake(audio: UploadFile):
+    """Fast check on the first seconds of speech: did the student just say "Question Vaani"? Decoded in English
+    mode, where the phrase comes out reliably ("Question Vani"), so the extension can pause the lecture at once."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(audio.file.read())
+    try:
+        heard = asr.english_head(f.name, seconds=3)
+        woke = split_wake(heard)[0]
+        if not woke and re.match(r"\W*quest", heard, re.I):  # "Question 20": a Hindi voice's "वाणी"; ask Hindi
+            heard = asr.english_head(f.name, seconds=3, lang="hi")
+            woke = split_wake(heard)[0]
+    finally:
+        os.unlink(f.name)
+    return {"wake": woke, "heard": heard}
+
+
+@app.post("/api/session/{sid}/lecture")
+def session_lecture(sid: str, audio: UploadFile, ctx: str = Form("{}")):
+    """A stretch of the lecture's own audio, captured from the browser tab, becomes lecture notes."""
+    c = Ctx.model_validate_json(ctx)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(audio.file.read())
+    try:
+        text, lang = asr.transcribe(f.name)
+    finally:
+        os.unlink(f.name)
+    if not text.strip():
+        return {"kind": "empty", "transcript": ""}
+    return agents.session(sid).lecture_audio(text, lang, c.model_dump())
 
 
 @app.post("/api/session/{sid}/end")
