@@ -1,5 +1,8 @@
 const DEFAULT_API = 'http://localhost:8000';
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+// The toolbar icon opens the panel from code, so the click counts as invoking Vaani on this tab (activeTab):
+// Chrome only lets an extension capture a tab's audio after that.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+chrome.action.onClicked.addListener((tab) => chrome.sidePanel.open({ windowId: tab.windowId }));
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   // Side panels can't show the mic permission prompt, so grant it once from a normal tab.
@@ -15,6 +18,21 @@ chrome.commands.onCommand.addListener((command, tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
   chrome.storage.session.set({ autostart: Date.now() });
   chrome.runtime.sendMessage({ type: 'toggle-recording' }).catch(() => {});
+});
+
+// Alt+Shift+L: capture the lecture playing in this tab. The shortcut itself invokes Vaani on the tab, so the
+// stream id can be minted here; the panel (opened now, before any await) picks it up and starts capturing.
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  if (command !== 'capture-lecture') return;
+  chrome.sidePanel.open({ windowId: tab.windowId });
+  try {
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    const lecture = { streamId, tabId: tab.id, url: tab.url, title: tab.title, at: Date.now() };
+    await chrome.storage.session.set({ lecture });
+    chrome.runtime.sendMessage({ type: 'capture-lecture', lecture }).catch(() => {});
+  } catch (e) {
+    chrome.storage.session.set({ notice: `Can't capture this tab: ${e.message}` });
+  }
 });
 
 // Right-click selected text -> note in the current chapter, processed by the server like a typed note.

@@ -250,7 +250,7 @@ function renderMain() {
   </nav>` : ''}
   <div class="notes-area">
     ${busy.length || S.draft ? `<section class="topic"><h2>Processing</h2><div class="masonry">${S.draft ? `<article class="note skeleton draft">
-        <span class="label">Drafting a note · saved when you pause for a while, ask a doubt, or stop</span>
+        <span class="label">Drafting a note · saved after 45 s without notes, when it gets long, or when you stop</span>
         <p class="tx-live" id="draft-text">${esc(S.draft)}</p></article>` : ''}${busy.map(pendingCard).join('')}</div></section>` : ''}
     ${ready.length
       ? shown.map((t) => `<section class="topic"><h2>${esc(t)} <span class="count">${groups.get(t).length}</span></h2>
@@ -434,11 +434,11 @@ async function sendSegment(wav) {
   listenUI(L.state);
   if (S.draft) armIdleFlush();  // the same draft note carries on after the answer
 }
-function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 20000); }  // quiet for 20 s: save it
+function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 45000); }  // 45 s without notes: save
 async function flushDraft() {
   clearTimeout(L.idle);
   try {
-    const { note_id } = await api(`/session/${SID}/flush`, { method: 'POST' });
+    const { note_id } = await api(`/session/${SID}/flush?which=notes`, { method: 'POST' });
     setDraft('');
     if (note_id) watchNew(note_id);
   } catch {}

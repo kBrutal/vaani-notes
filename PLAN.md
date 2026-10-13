@@ -85,6 +85,19 @@ model (at most 4 tool rounds, then it must answer). Tools are plain functions pl
 (`Tool`): `search_notes` (Atlas Vector Search over the student's notes, scoped to the chapter, subject or
 all) and `web_search` (DuckDuckGo, no key). Sources shown in the UI are only ones a tool actually returned.
 
+**Lecture capture (extension):** `chrome.tabCapture` gives the tab's audio to the same listener (played back so
+it stays audible; 1.5 s pauses, since the lecturer's speech is drafted anyway). `POST /api/session/{sid}/lecture`
+transcribes each piece into a separate lecture draft (~600 words per note, origin "lecture" in the note prompt,
+source = page + the video time the piece started). The last ~1500 characters of lecture transcript go to the
+tutor as `lecture_just_said`. While capturing, mic speech without "Question Vaani" is ignored (it would hear
+the lecture through the speakers).
+
+**Early wake:** the listener peeks at the first 2.5 s of every stretch of speech (`onPeek`) and sends it to
+`POST /api/wake` (English-mode decode; Hindi-mode retry when it hears "Question…" but not "Vaani"). On a hit
+the extension pauses the video and lecture capture at once (~3.5-4 s after the student starts speaking), so
+the rest of the question is recorded without the lecture; it resumes when the answer is shown, or straight
+away if the full transcript isn't a question.
+
 **Spoken language, per recording (no setting):** indic-transcribe's language ID picks the language. It is
 near-perfect for Bengali, Tamil, Telugu, Malayalam, Kannada and Hindi, but plain Indian-accented English lands
 in a Hindi-belt class with low confidence. So Hindi or an unsure Hindi-belt guess is transcribed as Hindi;

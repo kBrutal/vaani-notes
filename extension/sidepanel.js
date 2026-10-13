@@ -63,7 +63,7 @@ async function loadLib() {
 const currentSubject = () => S.lib.find((s) => s.chapters.some((c) => c.id === S.chapter));
 
 $('#chapter').addEventListener('change', (e) => {
-  if (S.draft) flushDraft();  // the draft belongs to the chapter it was spoken in
+  if (S.draft || S.lectureDraft) flushDraft('all');  // drafts belong to the chapter they were spoken in
   save('chapter', e.target.value);
   notice('');
   loadRecent();
@@ -186,7 +186,8 @@ function recUI(mode) {
 $('#mic').addEventListener('click', () => toggleListening());
 $('#ask-mic').addEventListener('click', () => toggleRec('ask'));
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && R.rec) stopRec(true);
+  if (e.key === 'Escape' && QV.listener) resumeAfterQuestion();  // cancel the question: nothing is sent
+  else if (e.key === 'Escape' && R.rec) stopRec(true);
   else if (e.key === 'Escape' && L.listener) stopListening();
 });
 
@@ -199,6 +200,7 @@ chrome.runtime.onMessage.addListener((msg, _, reply) => {
     reply(true);
   }
   if (msg.type === 'refresh') loadLib();
+  if (msg.type === 'capture-lecture') { chrome.storage.session.remove('lecture'); showTab('note'); toggleLecture(msg.lecture); }
 });
 
 // ---------- notes: saved instantly, processed by the server, shown with live steps ----------
@@ -224,8 +226,10 @@ async function loadRecent() {
   if (!S.chapter) { $('#recent').innerHTML = '<div class="empty">Pick a chapter to see its notes here.</div>'; return; }
   try {
     const notes = (await api(`/chapters/${S.chapter}/notes`)).reverse().slice(0, 8);
-    const draft = S.draft ? `<div class="note pending"><span class="label">Drafting a note · saved when you pause a while, ask, or stop</span>
-      <p class="said">${esc(S.draft)}</p></div>` : '';
+    const draft = (S.draft ? `<div class="note pending"><span class="label">Drafting a note · saved after 45 s without notes, when it gets long, or when you stop</span>
+      <p class="said">${esc(S.draft)}</p></div>` : '')
+      + (S.lectureDraft ? `<div class="note pending"><span class="label">🎧 Drafting lecture notes · a note every few minutes of lecture</span>
+      <p class="said">${esc(S.lectureDraft.slice(-400))}</p></div>` : '');
     $('#recent').innerHTML = draft + notes.map(noteCard).join('') || '<div class="empty">No notes yet. Tap the mic and explain a concept.</div>';
     notes.filter((n) => n.stage && n.stage !== 'failed').forEach((n) => watch(n.id));
   } catch (e) {
@@ -312,6 +316,7 @@ async function toggleListening() {
   const listener = new Listener({
     // in order, one at a time; while a doubt is being answered the queue waits, so nothing said is lost
     onSegment: (wav) => { L.queue = L.queue.then(() => sendSegment(wav)).catch((e) => console.error('segment', e)); },
+    onPeek: checkWake,  // ~2.5 s into speaking: "Question Vaani"? then pause the lecture while they ask
     onState: listenUI,
   });
   try { await listener.start(); } catch {
@@ -321,12 +326,92 @@ async function toggleListening() {
   notice('');
   L.listener = listener;
 }
+// "Question Vaani" spotted early (while the student is still talking): pause the video and the lecture capture
+// at once, so only their voice is recorded for the rest of the question. Released when the answer is shown,
+// or straight away if the full transcript turns out not to be a question.
+const Q = { hold: false, resumeVideo: false };
+async function checkWake(wav) {
+  if (Q.hold) return;
+  const fd = new FormData();
+  fd.append('audio', wav, 'peek.wav');
+  let r;
+  try { r = await api('/wake', { method: 'POST', body: fd }); } catch { return; }
+  if (!r.wake || Q.hold || !L.listener) return;
+  Q.hold = true;
+  const p = await readPage({ pause: true });
+  Q.resumeVideo = !!p?.playing;
+  LEC.listener?.pause();
+  $('#rec-status').textContent = '“Question Vaani” heard · lecture paused, ask away';
+}
+function releaseHold() {
+  if (!Q.hold) return;
+  Q.hold = false;
+  if (Q.resumeVideo) readPage({ resume: true });
+  Q.resumeVideo = false;
+  LEC.listener?.resume();
+}
+
+// ---------- the Question Vaani button: pause the video, take the question, answer, resume ----------
+const QV = { listener: null, wasPlaying: false, busy: false };
+async function questionVaani() {
+  if (QV.busy) return;
+  if (QV.listener) return QV.listener.finish() || resumeAfterQuestion();  // clicked again: send what was said
+  const p = await readPage({ pause: true });  // the video stops at once
+  QV.wasPlaying = !!p?.playing;
+  LEC.listener?.pause();  // lecture capture and continuous listening hold, so only the question is heard
+  L.listener?.pause();
+  const listener = new Listener({
+    vad: { endSilenceMs: 4000, maxSegmentMs: 60000 },
+    onSegment: (wav) => { listener.stop(); askQuestion(wav); },
+    onState: (s) => { if (s === 'hearing') qvUI('hearing'); },
+  });
+  try { await listener.start(); } catch {
+    resumeAfterQuestion();
+    notice('Microphone access is needed. Allow it in the tab that just opened, then try again.');
+    return chrome.tabs.create({ url: 'permission.html' });
+  }
+  QV.listener = listener;
+  qvUI('listening');
+}
+async function askQuestion(wav) {
+  QV.listener = null;
+  QV.busy = true;
+  qvUI('sending');
+  await readPage();
+  const fd = new FormData();
+  fd.append('audio', wav, 'question.wav');
+  fd.append('expect', 'question');
+  fd.append('ctx', JSON.stringify({ ...ctx(), source: pageSource() }));
+  await askFlow('🎙 Transcribing your question…', turn(api(`/session/${S.sid}/voice`, { method: 'POST', body: fd })).then(resolveAnswer));
+  resumeAfterQuestion();  // the answer is on screen: the lecture and listening pick up again
+}
+function resumeAfterQuestion() {
+  QV.listener?.stop();
+  Object.assign(QV, { listener: null, busy: false });
+  if (QV.wasPlaying) readPage({ resume: true });
+  QV.wasPlaying = false;
+  LEC.listener?.resume();
+  L.listener?.resume();
+  qvUI('off');
+}
+function qvUI(state) {
+  $('#qv-btn').classList.toggle('recording', state === 'listening' || state === 'hearing');
+  $('#qv-btn').classList.toggle('sending', state === 'sending');
+  $('#qv-btn').textContent = {
+    listening: '🎙 Listening to your question… (click to send)',
+    hearing: '🎙 Hearing you… (click to send, or pause 4 s)',
+    sending: '⏳ Vaani is answering…',
+  }[state] || '❓ Question Vaani';
+}
+$('#qv-btn').addEventListener('click', questionVaani);
+
 async function stopListening() {
   const l = L.listener;
   L.listener = null;
   l?.stop();
+  releaseHold();
   await L.queue;  // segments already said still reach the server; then close the note being drafted
-  flushDraft();
+  flushDraft('notes');
 }
 async function sendSegment(wav) {
   await readPage();  // the page as it is now: title, video time, selection
@@ -341,24 +426,103 @@ async function sendSegment(wav) {
   setDraft(r.drafting ?? S.draft);
   if (r.note) armIdleFlush();
   L.waiting = r.kind === 'waiting';  // "Question Vaani" said on its own: the next stretch is the question
+  if (r.kind === 'waiting') return;  // keep the lecture paused: the question is coming
+  if (r.kind !== 'question') releaseHold();  // the early "Question Vaani" check was a false alarm
   if (r.kind === 'error') return notice(r.reply);
-  if (r.kind === 'empty' || r.kind === 'note' || r.kind === 'waiting') return;
+  if (r.kind === 'empty' || r.kind === 'note' || r.kind === 'ignored') return;
   if (r.kind !== 'question') return askFlow(r.transcript || '…', Promise.resolve(r));  // quiz, summary
   clearTimeout(L.idle);  // note-taking (and the video) waits for the answer; speech meanwhile is held, not lost
   L.answering = true;
   const p = await readPage({ pause: true });
   await askFlow(r.question_spoken || r.transcript, resolveAnswer(r));
   if (p?.playing) readPage({ resume: true });
+  releaseHold();  // the answer is shown: the lecture (video + capture) picks up again
   L.answering = false;
   if (S.draft) armIdleFlush();  // the same draft note carries on after the answer
 }
-function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 20000); }  // quiet for 20 s: save it
-async function flushDraft() {
-  clearTimeout(L.idle);
+// ---------- lecture capture: the tab's own audio becomes notes ----------
+// The lecture playing in the tab is captured (and still played to you), cut at the lecturer's pauses, transcribed
+// and drafted into notes of a few minutes each, linked to the video time. The mic meanwhile is for doubts only.
+const LEC = { listener: null, queue: Promise.resolve(), tab: null };
+async function toggleLecture(given) {  // given: a stream id minted by the Alt+Shift+L shortcut
+  if (LEC.listener) return given ? null : stopLecture();
+  if (!S.chapter) return notice('Pick a chapter first (or create one with +).');
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = given ? { id: given.tabId, url: given.url, title: given.title } : active;
+  const listener = new Listener({
+    getStream: async () => {
+      const id = given?.streamId || await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+      return navigator.mediaDevices.getUserMedia({ audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: id } } });
+    },
+    playback: true,
+    vad: { endSilenceMs: 1500 },  // lecturers pause between sentences; the draft stitches pieces into notes
+    onSegment: (wav, secs) => { LEC.queue = LEC.queue.then(() => sendLecture(wav, secs)).catch((e) => console.error('lecture', e)); },
+    onState: (s) => lectureUI(s),
+  });
   try {
-    const { note_id } = await api(`/session/${S.sid}/flush`, { method: 'POST' });
-    setDraft('');
-    if (note_id) watchNew(note_id);
+    await listener.start();
+  } catch (e) {
+    return notice(/invoked|activeTab/.test(e.message)
+      ? 'Chrome needs you to call Vaani on the lecture tab first: on that tab press Alt+Shift+L (starts capture right away), or click the Vaani toolbar icon there and then this button.'
+      : `Couldn't capture this tab's audio: ${e.message}`);
+  }
+  Object.assign(LEC, { listener, tab });
+  if (!L.listener) {  // the mic comes on too, for "Question Vaani" doubts about the lecture
+    await toggleListening();
+    LEC.startedMic = !!L.listener;
+  }
+  notice('');
+  lectureUI('listening');
+}
+async function stopLecture() {
+  const l = LEC.listener;
+  LEC.listener = null;
+  l?.stop();
+  lectureUI('off');
+  if (LEC.startedMic && L.listener) stopListening();  // the mic came on with the lecture; it goes off with it
+  LEC.startedMic = false;
+  await LEC.queue;
+  flushDraft('lecture');
+}
+async function sendLecture(wav, secs) {
+  const p = await readPage();
+  const source = { type: 'lecture', url: LEC.tab?.url || p?.url, title: LEC.tab?.title || p?.title,
+                   t: p?.t != null ? Math.max(0, Math.round(p.t - secs)) : null };  // where this piece started
+  const fd = new FormData();
+  fd.append('audio', wav, 'lecture.wav');
+  fd.append('ctx', JSON.stringify({ ...ctx(), source }));
+  let r;
+  try { r = await api(`/session/${S.sid}/lecture`, { method: 'POST', body: fd }); } catch (e) { return notice(e.message); }
+  if (r.kind === 'error') return notice(r.reply);
+  if (r.note_id) watchNew(r.note_id);
+  if (r.kind === 'lecture') {
+    S.lectureDraft = r.drafting;
+    loadRecent();
+    // No quick idle save for lectures (a lecturer can talk for 40 s straight): only when the draft is full,
+    // capture stops, the chapter changes, or no lecture audio for 2 minutes (paused video).
+    clearTimeout(LEC.idle);
+    LEC.idle = setTimeout(() => flushDraft('lecture'), 120000);
+  }
+}
+function lectureUI(state) {
+  const on = !!LEC.listener || state === 'listening';
+  $('#lecture-btn').classList.toggle('on', on && state !== 'off');
+  $('#lecture-btn').textContent = on && state !== 'off' ? '⏹ Stop capturing lecture' : '🎧 Capture lecture audio';
+  $('#lecture-status').hidden = state === 'off';
+  $('#lecture-status').textContent = { listening: `Capturing the lecture · a note every few minutes${L.listener ? ' · mic on for “Question Vaani”' : ''}`,
+    hearing: 'Hearing the lecture…', paused: 'Lecture paused' }[state] || '';
+}
+$('#lecture-btn').addEventListener('click', () => toggleLecture());
+
+function armIdleFlush() { clearTimeout(L.idle); L.idle = setTimeout(flushDraft, 45000); }  // 45 s without notes: save
+async function flushDraft(which = 'notes') {  // which draft: 'notes' (yours), 'lecture', or 'all'
+  if (which !== 'lecture') clearTimeout(L.idle);
+  if (which !== 'notes') clearTimeout(LEC.idle);
+  try {
+    const { note_ids = [] } = await api(`/session/${S.sid}/flush?which=${which}`, { method: 'POST' });
+    if (which !== 'notes') S.lectureDraft = '';
+    if (which !== 'lecture') setDraft(''); else loadRecent();
+    note_ids.forEach(watchNew);
   } catch {}
 }
 async function watchNew(id) { await loadRecent(); watch(id); }
@@ -453,7 +617,7 @@ async function askFlow(label, promise) {
   }
   $('#thread').scrollTop = $('#thread').scrollHeight;
 }
-const ctx = () => ({ chapter_id: S.chapter || null, scope: S.scope, answer_lang: S.lang || null });
+const ctx = () => ({ chapter_id: S.chapter || null, scope: S.scope, answer_lang: S.lang || null, lecture_on: !!LEC.listener });
 // quick buttons go straight to the study tools; everything else is a turn in the study session
 const askText = (text, intent) => askFlow(text, intent
   ? post('/text', { text, mode: 'ask', intent, ctx: ctx() })
@@ -533,12 +697,17 @@ chrome.storage.session.onChanged.addListener((ch) => {
   renderScope();
   showTab(S.tab);
   recUI(null);
-  const { notice: pending, autostart, sid } = await chrome.storage.session.get(['notice', 'autostart', 'sid']);
+  const { notice: pending, autostart, sid, lecture } = await chrome.storage.session.get(['notice', 'autostart', 'sid', 'lecture']);
   S.sid = sid || crypto.randomUUID();  // one study session per browser session; the agents keep its context
   if (!sid) chrome.storage.session.set({ sid: S.sid });
   if (pending) { notice(pending); chrome.storage.session.remove('notice'); }
   readPage();
   await loadLib();
+  if (lecture && Date.now() - lecture.at < 8000) {  // the panel was opened by Alt+Shift+L
+    chrome.storage.session.remove('lecture');
+    showTab('note');
+    toggleLecture(lecture);
+  }
   if (autostart && Date.now() - autostart < 5000) {  // the panel was opened by Alt+Shift+R
     chrome.storage.session.remove('autostart');
     showTab('note');

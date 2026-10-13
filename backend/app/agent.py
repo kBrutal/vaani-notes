@@ -26,6 +26,8 @@ NOTE = ASR_HINT + """
 The student is studying {subject} > {chapter} and just spoke about what they read or understood: often
 thinking aloud, repeating themselves, reading lines out, with filler ("so basically", "I am studying about").
 Distil it into a crisp study note that keeps only what is worth revising, and file it under a topic.
+If origin is "lecture", the utterance is instead a transcript of the lecture they are watching (the teacher's
+words, possibly cut mid-sentence at both ends): distil the teacher's key points the same way.
 Existing topics in this chapter: {topics}
 
 Return ONLY a JSON object:
@@ -51,6 +53,9 @@ Rules:
   No two points may say the same thing, and don't repeat the summary in the key points.
 - Complete over the input: every exam-relevant fact the student stated (who it applies to, exceptions,
   what changed and from what, numbers) must survive into a key point.
+- already_noted lists the notes already saved in this chapter. Never repeat a point that is already there
+  (the same fact in other words is a repeat); note only what is new. If everything is already noted, return
+  {{"topic": null, "note": null}}.
 - Every fact must come from the input (plus page_selection if present). Never add facts, even true and
   relevant ones: don't complete a partial list, don't add clause/amendment numbers, dates, cases, grounds or
   tests the input didn't mention. If the student said "property was removed", write exactly that, not
@@ -148,9 +153,11 @@ def process_note(nid, audio=None):
         ch = db.chapter(str(doc["chapter_id"]))
         if not ch:
             return  # chapter deleted meanwhile; the note went with it
+        already = [{"title": n["title"], "key_points": n["key_points"]} for n in db.notes(chapter_id=ch["id"])[-8:]]
         r = llm.chat_json(
             NOTE.format(subject=ch["subject"], chapter=ch["name"], topics=json.dumps(ch["topics"], ensure_ascii=False)),
-            json.dumps({"page_selection": (doc.get("source") or {}).get("selection") or None,
+            json.dumps({"already_noted": already, "page_selection": (doc.get("source") or {}).get("selection") or None,
+                        "origin": "lecture" if (doc.get("source") or {}).get("type") == "lecture" else "student",
                         "detected_language": lang, "utterance": text}, ensure_ascii=False),
             think=True)  # background: quality over speed
         if not r.get("note"):

@@ -29,7 +29,7 @@
         <option>Odia</option><option>Assamese</option><option>Urdu</option>
       </select>
     </label>
-    <p class="hint">Shortcuts: <kbd>Alt+Shift+N</kbd> open · <kbd>Alt+Shift+R</kbd> voice note. Change them at chrome://extensions/shortcuts</p>
+    <p class="hint">Shortcuts: <kbd>Alt+Shift+N</kbd> open · <kbd>Alt+Shift+R</kbd> listen · <kbd>Alt+Shift+L</kbd> capture lecture. Change them at chrome://extensions/shortcuts</p>
   </section>
 
   <div class="chapter-row">
@@ -59,6 +59,9 @@
       <button id="mic" class="mic-big" title="Start / stop listening (Alt+Shift+R)" data-ic="mic"></button>
       <div id="rec-status" class="rec-status">Tap to start listening</div>
       <div class="hint">The mic stays on: everything you explain is noted. To ask, start with <b>“Question Vaani”</b></div>
+      <button id="qv-btn" class="btn primary qv-btn" title="Pause the video and ask Vaani a question (Esc cancels)">❓ Question Vaani</button>
+      <button id="lecture-btn" class="btn sm lecture-btn" title="Turn the lecture playing in this tab into notes (or press Alt+Shift+L on the lecture tab)">🎧 Capture lecture audio</button>
+      <div id="lecture-status" class="hint" hidden></div>
     </div>
     <details class="type-note">
       <summary>Type instead</summary>

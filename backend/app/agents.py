@@ -122,7 +122,8 @@ note-taking to ask a doubt. Answer like a good tutor talking to them (the reply 
 - 2-5 short sentences, conversational. No headings, tables or markdown; "- " bullet lines only when a list
   is genuinely clearer.
 - Use the session context: what they are studying, the page and selected text, what they just noted, and the
-  conversation so far (follow-ups refer back to it).
+  conversation so far (follow-ups refer back to it). lecture_just_said is the transcript of the lecture they are
+  watching, most recent last: "he / she / sir / ma'am / the teacher / that" usually refers to it.
 - Tools: search_notes for the student's own notes (when the doubt touches their material, or to connect the
   answer to what they noted); web_search only for specifics you are not certain of (exact dates, numbers,
   judgments, amendments, recent events), at most 2 searches. Standard textbook concepts (how the monsoon
@@ -135,6 +136,7 @@ Finish with ONLY a JSON object: {{"reply": str, "sources": [note ids or URLs you
         system = self.system.format(lang_rule=LANG_RULE.format(lang=lang))
         out, trace = self.run_json(json.dumps({
             "studying": session.studying(), "page": session.page_brief(), "recent_session": session.recent(12),
+            "lecture_just_said": session.lecture_heard[-1500:] or None,
             "question": question, "as_spoken": spoken}, ensure_ascii=False)
             + f"\n\nReply language: {lang}. Write the whole reply in it, whatever language the question is in.", system)
         reply = ensure_language(out.get("reply") or "Sorry, I couldn't work that out. Could you ask again?", lang)
@@ -160,17 +162,17 @@ class NoteTaker:
     saved as one note (background pipeline: agent.process_note) when a question comes up, the draft gets long,
     the chapter changes, or the client says the student went quiet / stopped listening."""
     pool = ThreadPoolExecutor(2)
-    MAX_WORDS = 250
-
-    def __init__(self):
-        self.parts, self.ctx, self.lang = [], None, None
+    def __init__(self, max_words=300):
+        self.parts, self.ctx, self.lang, self.max_words = [], None, None, max_words
 
     def add(self, text, lang, ctx):
         """Returns the id of a note saved because of this add (chapter changed / draft full), else None."""
         flushed = self.flush() if self.parts and self.ctx.get("chapter_id") != ctx.get("chapter_id") else None
+        if not self.parts:
+            self.ctx = ctx  # the note keeps where its first words were said: the page, the video time
         self.parts.append(text)
-        self.ctx, self.lang = ctx, self.lang or lang
-        if sum(len(p.split()) for p in self.parts) >= self.MAX_WORDS:
+        self.lang = self.lang or lang
+        if sum(len(p.split()) for p in self.parts) >= self.max_words:
             flushed = self.flush()
         return flushed
 
@@ -198,6 +200,8 @@ class StudySession:
         self.lock, self.touched = threading.Lock(), time.time()
         self.notetaker, self.answers = NoteTaker(), {}
         self.awaiting_question = False  # "Question Vaani" was said on its own: the next stretch is the question
+        self.lecture = NoteTaker(max_words=600)  # notes from the lecture's own audio (~4 min of speech per note)
+        self.lecture_heard = ""  # recent lecture transcript, so doubts like "what did he mean?" have context
 
     # --- context the agents see ---
     def remember(self, role, kind, text):
@@ -270,6 +274,11 @@ class StudySession:
                 woke, before, after = True, "", text
             self.awaiting_question = woke and not after
             note = before if woke else text
+            if ctx.get("lecture_on"):  # the lecture is being noted from its own audio; the mic is for doubts
+                note = ""
+                if not woke:
+                    return {"transcript": text, "lang": lang, "kind": "ignored", "note": None, "note_id": None,
+                            "drafting": self.notetaker.draft(), "mode": self.mode}
             out = {"transcript": text, "lang": lang, "woke": woke, "note": note or None, "note_id": None}
             if note:
                 if not db.chapter(ctx.get("chapter_id")):
@@ -285,6 +294,16 @@ class StudySession:
                 return {**out, "kind": "waiting", "mode": self.mode}
         r = self.turn(after, lang, ctx, "question", woke=True)
         return {**r, "transcript": text, "note": out["note"], "note_id": out["note_id"] or r.get("note_id")}
+
+    def lecture_audio(self, text, lang, ctx):
+        """A stretch of the lecture's own audio (captured from the tab): drafted into lecture notes."""
+        with self.lock:
+            self.touched = time.time()
+            if not db.chapter(ctx.get("chapter_id")):
+                return {"kind": "error", "reply": "Pick a chapter first, then I'll note the lecture."}
+            nid = self.lecture.add(text, lang, {**ctx, "source": {**(ctx.get("source") or {}), "type": "lecture"}})
+            self.lecture_heard = (self.lecture_heard + " " + text)[-3000:]
+            return {"kind": "lecture", "transcript": text, "lang": lang, "note_id": nid, "drafting": self.lecture.draft()}
 
     def _answer(self, aid, question, spoken, ctx, lang):
         """Runs in the answer pool while note-taking carries on."""
@@ -303,10 +322,11 @@ class StudySession:
     def answer(self, aid):
         return self.answers.get(aid) or {"status": "missing"}
 
-    def flush(self):
-        """The student went quiet or stopped listening: save the note being drafted."""
+    def flush(self, which="all"):
+        """Save what's being drafted: "notes" (the student's), "lecture", or "all". Returns the new note ids."""
         with self.lock:
-            return self.notetaker.flush()
+            takers = {"notes": [self.notetaker], "lecture": [self.lecture]}.get(which, [self.notetaker, self.lecture])
+            return [i for i in (t.flush() for t in takers) if i]
 
     def end(self):
         self.mode = "notetaking"

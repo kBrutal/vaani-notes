@@ -52,6 +52,15 @@ Then:
 - **Note tab:** pick or create a chapter, tap the mic and explain. The video pauses while you talk and resumes
   afterwards, and the page, the video timestamp and any selected text are attached as the source. The chapter's
   recent notes show live progress, with Retry if something fails.
+- **Lecture capture (🎧 Capture lecture audio):** on YouTube or any site playing a lecture, Vaani captures the
+  tab's own audio (you still hear it), transcribes the lecturer in whatever language they speak, and builds a
+  note every few minutes, linked to the video time. While capturing, your mic is for "Question Vaani …" doubts
+  only, and the answer uses what the lecturer just said ("what did he mean by that?"). The moment you say
+  "Question Vaani", the lecture pauses (video and capture) so only your voice is recorded; it resumes when the
+  answer appears.
+- **❓ Question Vaani button:** pauses the video (and lecture capture) at once and records your question; it's
+  sent when you pause for 4 s or click again. The answer appears in the Ask tab, then everything resumes.
+  Esc cancels. Saying "Question Vaani" works too, but the button is reliable even without headphones.
 - **Alt+Shift+R** on any page starts or stops a voice note, opening the panel if needed.
 - **Right-click selected text → Save to Vaani as a note** files it in the current chapter.
 - **Ask tab:** questions, Summary, Flashcards and Quiz, scoped to the chapter, the subject or all notes.
